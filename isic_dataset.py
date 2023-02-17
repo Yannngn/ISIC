@@ -15,7 +15,7 @@ class ISICDataset(Dataset):
         return len(self.img_labels)
 
     def __getitem__(self, idx):
-        img_file = self.img_labels.iloc[idx, 0] + '.jpg'
+        img_file = self.img_labels.iloc[idx, 0]
         img_path = os.path.join(self.img_dir, img_file)
         
         image = read_image(img_path)

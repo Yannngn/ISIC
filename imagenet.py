@@ -60,9 +60,10 @@ class ImageNetLightningModel(LightningModule):
     def __init__(
         self,
         data_path: str,
+        annotation_path: str,
         arch: str = 'resnet18',
-        pretrained: bool = False,
-        weights: str = 'default',
+        pretrained: bool = True,
+        weights: str = 'DEFAULT',
         lr: float = 0.1,
         momentum: float = 0.9,
         weight_decay: float = 1e-4,
@@ -78,6 +79,7 @@ class ImageNetLightningModel(LightningModule):
         self.momentum = momentum
         self.weight_decay = weight_decay
         self.data_path = data_path
+        self.annotation_path = annotation_path
         self.batch_size = batch_size
         self.workers = workers
         print('*' * 80)
@@ -135,10 +137,10 @@ class ImageNetLightningModel(LightningModule):
     def train_dataloader(self):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-        #train_dir = os.path.join(self.data_path, "train.csv")
+        annotation_path = os.path.join(self.annotation_path, "train.csv")
         train_loader = torch.utils.data.DataLoader(
             ISICDataset(
-                'train.csv',
+                annotation_path,
                 self.data_path,
                 transforms.Compose(
                     [transforms.RandomResizedCrop(224), 
@@ -156,10 +158,11 @@ class ImageNetLightningModel(LightningModule):
 
     def val_dataloader(self, test: bool=False):
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        #val_dir = os.path.join(self.data_path, "val.csv")
+        
+        annotation_path = os.path.join(self.annotation_path, 'val.csv' if not test else 'test.csv')
         val_loader = torch.utils.data.DataLoader(
             ISICDataset(
-                'val.csv' if not test else 'test.csv',
+                annotation_path, 
                 self.data_path,
                 transforms.Compose(
                     [transforms.Resize(256), 
@@ -218,7 +221,7 @@ class ImageNetLightningModel(LightningModule):
             dest="weight_decay",
         )
         parser.add_argument("--pretrained", dest="pretrained", action="store_true", help="use pre-trained model")
-        parser.add_argument("--weights", dest="weights", default='default', type=str, help="use weights")
+        parser.add_argument("--weights", dest="weights", default='DEFAULT', type=str, help="use weights")
         return parent_parser
 
 
@@ -253,6 +256,7 @@ def run_cli():
     parent_parser = ArgumentParser(add_help=False)
     parent_parser = pl.Trainer.add_argparse_args(parent_parser)
     parent_parser.add_argument("--data-path", metavar="DIR", type=str, help="path to dataset")
+    parent_parser.add_argument("--annotation-path", metavar="ANN", type=str, help="path to dataset")
     parent_parser.add_argument(
         "-e", "--evaluate", dest="evaluate", action="store_true",
         help="evaluate model on validation set"

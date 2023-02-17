@@ -1,0 +1,8 @@
+{
+    "basal cell carcinoma": 0,
+    "benign": 1,
+    "melanoma": 2,
+    "nevus": 3,
+    "pigmented benign keratosis": 4,
+    "seborrheic keratosis": 5
+}
