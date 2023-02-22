@@ -64,6 +64,7 @@ class ImageNetLightningModel(LightningModule):
         arch: str = 'resnet18',
         pretrained: bool = True,
         weights: str = 'DEFAULT',
+        num_classes: int = 1000,
         lr: float = 0.1,
         momentum: float = 0.9,
         weight_decay: float = 1e-4,
@@ -75,6 +76,7 @@ class ImageNetLightningModel(LightningModule):
         self.save_hyperparameters()
         self.arch = arch
         self.weights = weights if pretrained else None
+        self.num_classes = num_classes
         self.lr = lr
         self.momentum = momentum
         self.weight_decay = weight_decay
@@ -82,10 +84,13 @@ class ImageNetLightningModel(LightningModule):
         self.annotation_path = annotation_path
         self.batch_size = batch_size
         self.workers = workers
+        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.unnormalize = transforms.Compose([transforms.Normalize(mean=[-1 * m/s for m, s in zip([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])], std=[1/s for s in [0.229, 0.224, 0.225]])])
+        
         print('*' * 80)
         print(f'*************** Loading model {self.arch}')
         print('*' * 80)
-        self.model = models.__dict__[self.arch](weights=self.weights)
+        self.model = models.__dict__[self.arch](weights=self.weights, num_classes=self.num_classes)
 
     def forward(self, x):
         return self.model(x)
@@ -94,7 +99,8 @@ class ImageNetLightningModel(LightningModule):
         images, target = batch
         output = self(images)
         loss_train = F.cross_entropy(output, target)
-        acc1, acc5 = self.__accuracy(output, target, topk=(1, 5))
+        acc1, acc5 = self.__accuracy(output, target, topk=(1, min(5, self.num_classes)))
+        self.logger.experiment.add_image("input", self.unnormalize(images[0].detach().cpu()), self.current_epoch, dataformats="CHW")
         self.log("train_loss", loss_train, on_step=True, on_epoch=True, logger=True)
         self.log("train_acc1", acc1, on_step=True, prog_bar=True, on_epoch=True, logger=True)
         self.log("train_acc5", acc5, on_step=True, on_epoch=True, logger=True)
@@ -104,7 +110,8 @@ class ImageNetLightningModel(LightningModule):
         images, target = batch
         output = self(images)
         loss_val = F.cross_entropy(output, target)
-        acc1, acc5 = self.__accuracy(output, target, topk=(1, 5))
+        acc1, acc5 = self.__accuracy(output, target, topk=(1, min(5, self.num_classes)))
+        self.logger.experiment.add_image("input", self.unnormalize(images[0].detach().cpu()), self.current_epoch, dataformats="CHW")
         self.log(f"{prefix}_loss", loss_val, on_step=True, on_epoch=True)
         self.log(f"{prefix}_acc1", acc1, on_step=True, prog_bar=True, on_epoch=True)
         self.log(f"{prefix}_acc5", acc5, on_step=True, on_epoch=True)
@@ -135,8 +142,6 @@ class ImageNetLightningModel(LightningModule):
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-
         annotation_path = os.path.join(self.annotation_path, "train.csv")
         train_loader = torch.utils.data.DataLoader(
             ISICDataset(
@@ -145,8 +150,10 @@ class ImageNetLightningModel(LightningModule):
                 transforms.Compose(
                     [transforms.RandomResizedCrop(224), 
                      transforms.RandomHorizontalFlip(),
+                     transforms.RandomVerticalFlip(),
+                     transforms.RandomRotation(15),
                      transforms.ConvertImageDtype(torch.float32),
-                     normalize,
+                     self.normalize,
                      ]
                 ),
             ), 
@@ -156,9 +163,7 @@ class ImageNetLightningModel(LightningModule):
         )
         return train_loader
 
-    def val_dataloader(self, test: bool=False):
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        
+    def val_dataloader(self, test: bool=False):        
         annotation_path = os.path.join(self.annotation_path, 'val.csv' if not test else 'test.csv')
         val_loader = torch.utils.data.DataLoader(
             ISICDataset(
@@ -168,7 +173,7 @@ class ImageNetLightningModel(LightningModule):
                     [transforms.Resize(256), 
                      transforms.CenterCrop(224),
                      transforms.ConvertImageDtype(torch.float32),
-                     normalize,
+                     self.normalize,
                      ]
                 ),
             ),
@@ -220,6 +225,13 @@ class ImageNetLightningModel(LightningModule):
             help="weight decay (default: 1e-4)",
             dest="weight_decay",
         )
+        parser.add_argument(
+            "--ckpt-path",
+            default=None,
+            type=str,
+            help="checkpoint path",
+            dest="ckpt_path",
+        )
         parser.add_argument("--pretrained", dest="pretrained", action="store_true", help="use pre-trained model")
         parser.add_argument("--weights", dest="weights", default='DEFAULT', type=str, help="use weights")
         return parent_parser
@@ -240,6 +252,8 @@ def main(args: Namespace) -> None:
     trainer = pl.Trainer.from_argparse_args(args)
     torch.set_float32_matmul_precision('medium')
     
+    trainer.tune(model)
+    
     if args.evaluate:
         trainer.test(model)
     else:
@@ -257,13 +271,14 @@ def run_cli():
     parent_parser = pl.Trainer.add_argparse_args(parent_parser)
     parent_parser.add_argument("--data-path", metavar="DIR", type=str, help="path to dataset")
     parent_parser.add_argument("--annotation-path", metavar="ANN", type=str, help="path to dataset")
+    parent_parser.add_argument("--num-classes", dest='num_classes', type=int, default=1000, help="number of classes")
     parent_parser.add_argument(
         "-e", "--evaluate", dest="evaluate", action="store_true",
         help="evaluate model on validation set"
     )
     parent_parser.add_argument("--seed", type=int, default=42, help="seed for initializing training.")
     parser = ImageNetLightningModel.add_model_specific_args(parent_parser)
-    parser.set_defaults(profiler="simple", deterministic=True, max_epochs=num_epochs_ or 90)
+    parser.set_defaults(profiler="simple", deterministic=False, max_epochs=num_epochs_ or 90)
     args = parser.parse_args()
     main(args)
 
